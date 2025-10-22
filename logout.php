@@ -1,6 +1,9 @@
 <?php
-session_start();
+require_once 'config.php';
+
+// Destroy session
 session_destroy();
-header('Content-Type: application/json');
-echo json_encode(['success' => true, 'message' => 'Logged out successfully']);
+
+// Redirect to login page
+redirect('login.php');
 ?>

@@ -1,35 +1,63 @@
 <?php
 require_once 'config.php';
 
+// Set content type to JSON
 header('Content-Type: application/json');
 
-$action = $_POST['action'] ?? '';
+// Get request method and action
+$method = $_SERVER['REQUEST_METHOD'];
+$action = $_GET['action'] ?? '';
 
-switch($action) {
-    case 'login':
-        handleLogin();
-        break;
-    case 'register':
-        handleRegister();
-        break;
-    case 'getUsers':
-        handleGetUsers();
-        break;
-    case 'addUser':
-        handleAddUser();
-        break;
-    case 'checkUsername':
-        handleCheckUsername();
-        break;
-    default:
-        echo json_encode(['success' => false, 'message' => 'Invalid action']);
-        break;
+try {
+    $pdo = getDBConnection();
+    
+    switch($action) {
+        case 'login':
+            if ($method === 'POST') {
+                handleLogin($pdo);
+            }
+            break;
+            
+        case 'register':
+            if ($method === 'POST') {
+                handleRegister($pdo);
+            }
+            break;
+            
+        case 'get_users':
+            if ($method === 'GET') {
+                handleGetUsers($pdo);
+            }
+            break;
+            
+        case 'add_user':
+            if ($method === 'POST') {
+                handleAddUser($pdo);
+            }
+            break;
+            
+        case 'check_username':
+            if ($method === 'GET') {
+                handleCheckUsername($pdo);
+            }
+            break;
+            
+        case 'search_users':
+            if ($method === 'GET') {
+                handleSearchUsers($pdo);
+            }
+            break;
+            
+        default:
+            echo json_encode(['success' => false, 'message' => 'Invalid action']);
+            break;
+    }
+} catch (Exception $e) {
+    echo json_encode(['success' => false, 'message' => 'Server error: ' . $e->getMessage()]);
 }
 
-function handleLogin() {
-    global $pdo;
-    
-    $username = $_POST['username'] ?? '';
+function handleLogin($pdo) {
+    $username = sanitizeInput($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
     
     if (empty($username) || empty($password)) {
@@ -37,42 +65,42 @@ function handleLogin() {
         return;
     }
     
-    try {
-        $stmt = $pdo->prepare("SELECT id, username, firstname, lastname, is_admin, password FROM users WHERE username = ?");
-        $stmt->execute([$username]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    $stmt = $pdo->prepare("SELECT id, username, firstname, lastname, is_admin, password FROM users WHERE username = ?");
+    $stmt->execute([$username]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($user && password_verify($password, $user['password'])) {
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['username'] = $user['username'];
+        $_SESSION['firstname'] = $user['firstname'];
+        $_SESSION['lastname'] = $user['lastname'];
+        $_SESSION['is_admin'] = (bool)$user['is_admin'];
         
-        if ($user && password_verify($password, $user['password'])) {
-            $_SESSION['user_id'] = $user['id'];
-            $_SESSION['username'] = $user['username'];
-            $_SESSION['firstname'] = $user['firstname'];
-            $_SESSION['lastname'] = $user['lastname'];
-            $_SESSION['is_admin'] = $user['is_admin'];
-            
-            echo json_encode([
-                'success' => true, 
-                'message' => 'Login successful',
-                'is_admin' => $user['is_admin']
-            ]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Invalid username or password']);
-        }
-    } catch(PDOException $e) {
-        echo json_encode(['success' => false, 'message' => 'Database error']);
+        echo json_encode([
+            'success' => true, 
+            'message' => 'Login successful',
+            'user' => [
+                'id' => $user['id'],
+                'username' => $user['username'],
+                'firstname' => $user['firstname'],
+                'lastname' => $user['lastname'],
+                'is_admin' => (bool)$user['is_admin']
+            ]
+        ]);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Invalid username or password']);
     }
 }
 
-function handleRegister() {
-    global $pdo;
-    
-    $username = $_POST['username'] ?? '';
-    $firstname = $_POST['firstname'] ?? '';
-    $lastname = $_POST['lastname'] ?? '';
+function handleRegister($pdo) {
+    $username = sanitizeInput($_POST['username'] ?? '');
+    $firstname = sanitizeInput($_POST['firstname'] ?? '');
+    $lastname = sanitizeInput($_POST['lastname'] ?? '');
     $password = $_POST['password'] ?? '';
-    $confirmPassword = $_POST['confirm_password'] ?? '';
+    $confirm_password = $_POST['confirm_password'] ?? '';
     
     // Validation
-    if (empty($username) || empty($firstname) || empty($lastname) || empty($password) || empty($confirmPassword)) {
+    if (empty($username) || empty($firstname) || empty($lastname) || empty($password) || empty($confirm_password)) {
         echo json_encode(['success' => false, 'message' => 'All fields are required']);
         return;
     }
@@ -82,69 +110,63 @@ function handleRegister() {
         return;
     }
     
-    if ($password !== $confirmPassword) {
+    if ($password !== $confirm_password) {
         echo json_encode(['success' => false, 'message' => 'Passwords do not match']);
         return;
     }
     
-    try {
-        // Check if username already exists
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
-        $stmt->execute([$username]);
-        if ($stmt->fetch()) {
-            echo json_encode(['success' => false, 'message' => 'Username already exists']);
-            return;
-        }
-        
-        // Insert new user
-        $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare("INSERT INTO users (username, firstname, lastname, password) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$username, $firstname, $lastname, $hashedPassword]);
-        
+    // Check if username already exists
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
+    $stmt->execute([$username]);
+    if ($stmt->fetch()) {
+        echo json_encode(['success' => false, 'message' => 'Username already exists']);
+        return;
+    }
+    
+    // Insert new user
+    $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+    $stmt = $pdo->prepare("INSERT INTO users (username, firstname, lastname, password) VALUES (?, ?, ?, ?)");
+    
+    if ($stmt->execute([$username, $firstname, $lastname, $hashed_password])) {
         echo json_encode(['success' => true, 'message' => 'Registration successful']);
-    } catch(PDOException $e) {
-        echo json_encode(['success' => false, 'message' => 'Database error']);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Registration failed']);
     }
 }
 
-function handleGetUsers() {
-    global $pdo;
-    
+function handleGetUsers($pdo) {
     if (!isLoggedIn() || !isAdmin()) {
-        echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+        echo json_encode(['success' => false, 'message' => 'Access denied']);
         return;
     }
     
-    $search = $_POST['search'] ?? '';
+    $search = $_GET['search'] ?? '';
+    $sql = "SELECT id, username, firstname, lastname, is_admin, date_added FROM users";
+    $params = [];
     
-    try {
-        if (!empty($search)) {
-            $stmt = $pdo->prepare("SELECT id, username, firstname, lastname, is_admin, date_added FROM users WHERE username LIKE ? OR firstname LIKE ? OR lastname LIKE ? ORDER BY date_added DESC");
-            $searchTerm = "%$search%";
-            $stmt->execute([$searchTerm, $searchTerm, $searchTerm]);
-        } else {
-            $stmt = $pdo->prepare("SELECT id, username, firstname, lastname, is_admin, date_added FROM users ORDER BY date_added DESC");
-            $stmt->execute();
-        }
-        
-        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        echo json_encode(['success' => true, 'users' => $users]);
-    } catch(PDOException $e) {
-        echo json_encode(['success' => false, 'message' => 'Database error']);
+    if (!empty($search)) {
+        $sql .= " WHERE username LIKE ? OR firstname LIKE ? OR lastname LIKE ?";
+        $searchTerm = "%$search%";
+        $params = [$searchTerm, $searchTerm, $searchTerm];
     }
+    
+    $sql .= " ORDER BY date_added DESC";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    echo json_encode(['success' => true, 'users' => $users]);
 }
 
-function handleAddUser() {
-    global $pdo;
-    
+function handleAddUser($pdo) {
     if (!isLoggedIn() || !isAdmin()) {
-        echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+        echo json_encode(['success' => false, 'message' => 'Access denied']);
         return;
     }
     
-    $username = $_POST['username'] ?? '';
-    $firstname = $_POST['firstname'] ?? '';
-    $lastname = $_POST['lastname'] ?? '';
+    $username = sanitizeInput($_POST['username'] ?? '');
+    $firstname = sanitizeInput($_POST['firstname'] ?? '');
+    $lastname = sanitizeInput($_POST['lastname'] ?? '');
     $password = $_POST['password'] ?? '';
     $is_admin = isset($_POST['is_admin']) ? 1 : 0;
     
@@ -159,44 +181,53 @@ function handleAddUser() {
         return;
     }
     
-    try {
-        // Check if username already exists
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
-        $stmt->execute([$username]);
-        if ($stmt->fetch()) {
-            echo json_encode(['success' => false, 'message' => 'Username already exists']);
-            return;
-        }
-        
-        // Insert new user
-        $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare("INSERT INTO users (username, firstname, lastname, password, is_admin) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([$username, $firstname, $lastname, $hashedPassword, $is_admin]);
-        
+    // Check if username already exists
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
+    $stmt->execute([$username]);
+    if ($stmt->fetch()) {
+        echo json_encode(['success' => false, 'message' => 'Username already exists']);
+        return;
+    }
+    
+    // Insert new user
+    $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+    $stmt = $pdo->prepare("INSERT INTO users (username, firstname, lastname, password, is_admin) VALUES (?, ?, ?, ?, ?)");
+    
+    if ($stmt->execute([$username, $firstname, $lastname, $hashed_password, $is_admin])) {
         echo json_encode(['success' => true, 'message' => 'User added successfully']);
-    } catch(PDOException $e) {
-        echo json_encode(['success' => false, 'message' => 'Database error']);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Failed to add user']);
     }
 }
 
-function handleCheckUsername() {
-    global $pdo;
-    
-    $username = $_POST['username'] ?? '';
+function handleCheckUsername($pdo) {
+    $username = sanitizeInput($_GET['username'] ?? '');
     
     if (empty($username)) {
         echo json_encode(['success' => false, 'message' => 'Username is required']);
         return;
     }
     
-    try {
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
-        $stmt->execute([$username]);
-        $exists = $stmt->fetch() ? true : false;
-        
-        echo json_encode(['success' => true, 'exists' => $exists]);
-    } catch(PDOException $e) {
-        echo json_encode(['success' => false, 'message' => 'Database error']);
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
+    $stmt->execute([$username]);
+    $exists = $stmt->fetch() !== false;
+    
+    echo json_encode(['success' => true, 'exists' => $exists]);
+}
+
+function handleSearchUsers($pdo) {
+    $search = sanitizeInput($_GET['search'] ?? '');
+    
+    if (empty($search) || strlen($search) < 2) {
+        echo json_encode(['success' => true, 'users' => []]);
+        return;
     }
+    
+    $searchTerm = "%$search%";
+    $stmt = $pdo->prepare("SELECT id, username, firstname, lastname, is_admin FROM users WHERE username LIKE ? OR firstname LIKE ? OR lastname LIKE ? ORDER BY username LIMIT 10");
+    $stmt->execute([$searchTerm, $searchTerm, $searchTerm]);
+    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    echo json_encode(['success' => true, 'users' => $users]);
 }
 ?>
